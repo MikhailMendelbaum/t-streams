@@ -21,22 +21,24 @@ class ProducerMasterChangeComplexTest  extends FlatSpec with Matchers with Befor
 
   class ProducerWorker(val factory: TStreamsFactory, val onCompleteLatch: CountDownLatch, val amount: Int, val probability: Double) {
     var producer: Producer[String] = null
-    var counter: Int = 0
     // public because will be called
     def loop(partitions: Set[Int], checkpointModeSync: Boolean = true) = {
+      producer = makeNewProducer(partitions)
+      var counter: Int = 0
       while(counter < amount) {
-        producer = makeNewProducer(partitions)
-
-        while(probability < Random.nextDouble() && counter < amount) {
+        if (probability <= Random.nextDouble()) {
           val t = producer.newTransaction(policy = NewTransactionProducerPolicy.CheckpointIfOpened)
           t.send("test")
           t.checkpoint(checkpointModeSync)
           counter += 1
-        }
-        producer.stop()
+        } else {
+          producer.stop()
+          producer = makeNewProducer(partitions)}
       }
       onCompleteLatch.countDown()
+      producer.stop()
     }
+
 
     def run(partitions: Set[Int], checkpointModeSync: Boolean = true): Thread = {
       val thread = new Thread(new Runnable {
@@ -45,7 +47,6 @@ class ProducerMasterChangeComplexTest  extends FlatSpec with Matchers with Befor
       thread.start()
       thread
     }
-
     // private - will not be called outside
     private def makeNewProducer(partitions: Set[Int]) = {
       factory.getProducer[String](
@@ -58,7 +59,7 @@ class ProducerMasterChangeComplexTest  extends FlatSpec with Matchers with Befor
   }
   val PRODUCERS_AMOUNT          = 10
   val TRANSACTIONS_AMOUNT_EACH  = 100
-  val PROBABILITY               = 0.005 // 0.01=1%
+  val PROBABILITY               = 0.001 // 0.01=1%
   val PARTITIONS                = (0 until 5).toSet
   val MAX_WAIT_AFTER_ALL_PRODUCERS = 5
 
@@ -80,9 +81,9 @@ class ProducerMasterChangeComplexTest  extends FlatSpec with Matchers with Befor
   val subscriber = f.getSubscriber[String](name = "s",
     transactionGenerator = LocalGeneratorCreator.getGen(),
     converter = arrayByteToStringConverter,
-    partitions = PARTITIONS,     // Set(0),
+    partitions = PARTITIONS,
     offset = Newest,
-    isUseLastOffset = false, // true
+    isUseLastOffset = false,
     callback = new Callback[String] {
       override def onTransaction(consumer: TransactionOperator[String], transaction: ConsumerTransaction[String]): Unit = this.synchronized {
         subscriberCounter += 1
